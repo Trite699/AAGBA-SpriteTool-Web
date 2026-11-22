@@ -1,4 +1,4 @@
-/* GBA ROM mode for the AA sprite tool. Add <script src="aa3.js"></script> just before </body>.
+/* GBA ROM mode for the AA sprite tool. Load it with a script tag (in the head or at the end of the body; it waits for the page).
    Format (decoded from Gyakuten Saiban 3 GBA): patch table = 12-byte entries {u32 ptr(LZ77, 8bpp tiles), u16 x, u16 y, u16 w, u16 h} (tiles);
    a sequence = 4-byte entries {u8 first patch, u8 count, 0, 0}, ended by count 0. A frame draws `count` consecutive patches onto the BG. */
 (function(){
@@ -28,6 +28,7 @@ function blit(img,tiles,bpp,P,x,y,w,h,tr){ // tiles in raster order inside a w*h
     for(let yy=0;yy<8;yy++)for(let xx=0;xx<8;xx++){ let v; if(bpp===8)v=tiles[t*64+yy*8+xx]; else{ const b=tiles[t*32+yy*4+(xx>>1)]; v=xx&1?b>>4:b&15; }
       if(tr&&!v)continue; const X=tx+xx,Y=ty+yy; if(X<0||Y<0||X>=SW||Y>=SH)continue; const c=P[v],o=(Y*SW+X)*4; img.data[o]=c[0];img.data[o+1]=c[1];img.data[o+2]=c[2];img.data[o+3]=255; } } }
 if(typeof document==='undefined'){ module.exports={lz,patches,discover,seq,pal,blit}; return; }
+const boot=()=>{ // runs after the page exists, so the script works from <head> or the end of <body>
 
 const $=id=>document.getElementById(id),hex=s=>parseInt(String(s).trim().replace(/^0x/i,''),16)||0;
 let R=null,P=[],seqs=[],fr=0,play=true,acc=0,last=0,cache=new Map();
@@ -97,4 +98,6 @@ $('g_gif').onclick=async()=>{ if(typeof getFF!=='function'){st('ffmpeg export ne
     const c=await f.exec(['-f','concat','-i','gl.txt','-vf','split[a][b];[a]palettegen=reserve_transparent=1[p];[b][p]paletteuse=alpha_threshold=128','-vsync','vfr','-loop','0','go.gif']); if(c!==0)throw new Error('ffmpeg exit '+c);
     w.push('go.gif'); dl(new Blob([(await f.readFile('go.gif')).buffer],{type:'image/gif'}),'gba_sequence.gif'); st('GIF exported.','ok');
   }catch(e){st('Export failed: '+e.message,'err');} finally{ if(typeof ff!=='undefined'&&ff)for(const n of w){try{await ff.deleteFile(n);}catch(_){}} b.disabled=false; } };
+};
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 })();
