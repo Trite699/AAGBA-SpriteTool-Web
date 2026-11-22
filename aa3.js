@@ -29,6 +29,11 @@ function blit(img,tiles,bpp,P,x,y,w,h,tr){ // tiles in raster order inside a w*h
       if(tr&&!v)continue; const X=tx+xx,Y=ty+yy; if(X<0||Y<0||X>=SW||Y>=SH)continue; const c=P[v],o=(Y*SW+X)*4; img.data[o]=c[0];img.data[o+1]=c[1];img.data[o+2]=c[2];img.data[o+3]=255; } } }
 if(typeof document==='undefined'){ module.exports={lz,patches,discover,seq,pal,blit}; return; }
 const boot=()=>{ // runs after the page exists, so the script works from <head> or the end of <body>
+  { const q=x=>document.querySelector(x); // update the main page's wording so it mentions .gba support
+    const sub=q('.sub'); if(sub&&!sub.dataset.gba){ sub.dataset.gba=1; sub.innerHTML+=' It also opens a Gyakuten Saiban 3 <code>.gba</code> ROM directly (see “GBA ROM mode” below).'; }
+    const dl=q('#drop .drop-label'); if(dl)dl.textContent='Click or drop .pix and .seq files (matching names are paired), or a .gba ROM';
+    const dh=q('#drop .drop-hint'); if(dh)dh.textContent='e.g. animation01.pix + animation01.seq, or Gyakuten Saiban 3 (Japan).gba';
+    const ft=q('.foot'); if(ft&&!ft.dataset.gba){ ft.dataset.gba=1; ft.innerHTML+='<br><br>GBA ROM mode — .gba: no .pix/.seq files exist, so the ROM is read directly. Graphics are BIOS-LZ77 blocks. A patch table holds 12-byte entries (pointer to 8bpp tiles, x, y, w, h in tiles); a sequence is a list of 4-byte entries (first patch, count) that draw consecutive patches onto the background. Palettes and base images are not linked to scenes yet, so pick them manually.'; } }
 
 const $=id=>document.getElementById(id),hex=s=>parseInt(String(s).trim().replace(/^0x/i,''),16)||0;
 let R=null,P=[],seqs=[],fr=0,play=true,acc=0,last=0,cache=new Map();
@@ -72,9 +77,14 @@ function setup(){ const np=+$('g_pn').value; seqs.found=discover(R,np,0x160000,0
   $('g_pc').innerHTML='<option value="">—</option>'+CP.map(o=>`<option value="${o.toString(16)}">${h(o)}</option>`).join('');
   $('g_bc').innerHTML='<option value="">none</option>'+CB.map(b=>`<option value="${b[0].toString(16)}">${h(b[0])} (${b[1]} B)</option>`).join('');
   loadPal(); const f=seqs.found[0]; if(f)pick(f.off); }
-$('g_file').onchange=async e=>{ const f=e.target.files[0]; if(!f)return; R=new Uint8Array(await f.arrayBuffer()); cache.clear();
+const loadRom=async f=>{ R=new Uint8Array(await f.arrayBuffer()); cache.clear();
   const t=String.fromCharCode(...R.subarray(0xA0,0xAC)); $('g_ui').style.display=''; setup();
-  if(t!=='GYAKUTEN_SA3')st('Header says "'+t.trim()+'", not GYAKUTEN_SA3 — offsets are for the Japanese GS3 ROM and may not apply.','warn'); };
+  if(t!=='GYAKUTEN_SA3')st('Header says "'+t.trim()+'", not GYAKUTEN_SA3 — offsets are for the Japanese GS3 ROM and may not apply.','warn'); if(card.scrollIntoView)card.scrollIntoView({behavior:'smooth',block:'start'}); };
+$('g_file').onchange=e=>{ if(e.target.files[0])loadRom(e.target.files[0]); };
+// A .gba dropped or picked in the tool's own "Load files" box is sent here instead of being rejected.
+const isRom=fs=>[...(fs||[])].find(f=>/\.gba$/i.test(f.name));
+document.addEventListener('change',e=>{ if(e.target.id==='fin'){ const f=isRom(e.target.files); if(f){ e.stopImmediatePropagation(); loadRom(f); e.target.value=''; } } },true);
+document.addEventListener('drop',e=>{ const f=isRom(e.dataTransfer&&e.dataTransfer.files); if(f){ e.preventDefault(); e.stopImmediatePropagation(); loadRom(f); } },true);
 $('g_seq').onchange=()=>$('g_seq').value&&pick(+$('g_seq').value);
 $('g_dc').onchange=()=>{ const v=$('g_dc').value; if(!v)return; const [a,n]=v.split(',').map(Number); seqs.cur=[{b:a,i:0,c:n}]; fr=0; st('Scene draw: '+n+' patch(es) at 0x'+a.toString(16).toUpperCase()+' (single frame).','ok'); show(); };
 $('g_pc').onchange=()=>{ if($('g_pc').value){$('g_po').value=$('g_pc').value.toUpperCase();loadPal();show();} };
