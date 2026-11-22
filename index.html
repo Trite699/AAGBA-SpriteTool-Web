@@ -123,7 +123,13 @@ input[type=range]{width:100%;accent-color:var(--accent);}
         <button class="btn btn-sm" id="dlall">Download all frames (strip PNG)</button>
         <button class="btn btn-sm" id="dlsheet">Download tile sheet PNG</button>
       </div>
-      <p class="hint">Frame durations are in 1/60 s ticks. The low byte of the duration field is the time; the high byte holds flags (shown per frame). 254/255 is treated as the end marker (held, or skipped when looping).</p>
+      <div class="opts" style="margin-bottom:0">
+        <label>Export format<select class="sel" id="xfmt"><option value="gif">GIF</option><option value="apng">APNG</option><option value="webp">WebP (lossless)</option></select></label>
+        <label>Export background<select class="sel" id="xbg"><option value="">Transparent</option><option value="#000000">Black</option><option value="#ffffff">White</option><option value="#00b140">Green</option></select></label>
+        <button class="btn btn-primary btn-sm" id="dlanim">Export animation (256×192)</button>
+      </div>
+      <div id="xmsg"></div>
+      <p class="hint">Frame durations are in 1/60 s ticks. The low byte of the duration field is the time; the high byte holds flags (shown per frame). 254/255 is treated as the end marker (held, or skipped when looping). Animation export uses ffmpeg.wasm, loaded from a CDN on first use (needs an internet connection).</p>
     </div>
     <div class="card">
       <div class="card-title">All animations <span class="card-title-right">click one to play it</span></div>
@@ -382,6 +388,80 @@ async function loadFiles(files){
   try{buildGallery();pickSeq(pi);}catch(e){setMsg(e.message,'err');return;}setBg();playing=true;$('play').textContent='Pause';
   if(!warn.length)setMsg('Loaded '+pixes.size+' .pix + '+seqs.length+' animation'+(seqs.length>1?'s':'')+'.','ok');
 }
+
+// ---------- ffmpeg.wasm export (GIF / APNG / WebP, 256x192) ----------
+const FF_VER='0.12.10',CORE_VER='0.12.6';
+const FF_BASE='https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@'+FF_VER+'/dist/umd/';
+const CORE_BASE='https://cdn.jsdelivr.net/npm/@ffmpeg/core@'+CORE_VER+'/dist/umd/';
+let ff=null;
+function xMsg(t,c){ $('xmsg').innerHTML=t?`<div class="status ${c||''}"><span class="dot"></span><span>${esc(t)}</span></div>`:''; }
+function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=()=>rej(new Error('Could not load '+src));document.head.appendChild(s);});}
+async function blobURL(url,type){
+  const r=await fetch(url);if(!r.ok)throw new Error('Download failed ('+r.status+'): '+url);
+  return URL.createObjectURL(new Blob([await r.arrayBuffer()],{type}));
+}
+async function getFF(){
+  if(ff)return ff;
+  if(!window.FFmpegWASM){xMsg('Loading ffmpeg.wasm…');await loadScript(FF_BASE+'ffmpeg.js');}
+  const f=new FFmpegWASM.FFmpeg();
+  f.on('progress',({progress})=>{if(progress>0&&progress<=1)xMsg('Encoding… '+Math.round(progress*100)+'%');});
+  xMsg('Loading ffmpeg core (~30 MB, first time only)…');
+  await f.load({
+    classWorkerURL:await blobURL(FF_BASE+'814.ffmpeg.js','text/javascript'),
+    coreURL:await blobURL(CORE_BASE+'ffmpeg-core.js','text/javascript'),
+    wasmURL:await blobURL(CORE_BASE+'ffmpeg-core.wasm','application/wasm')
+  });
+  return ff=f;
+}
+// 256x192 window centred on the sprite origin (like a DS screen)
+function exportCanvas(off,bg){
+  const c=document.createElement('canvas');c.width=256;c.height=192;
+  const x=c.getContext('2d');
+  if(bg){x.fillStyle=bg;x.fillRect(0,0,256,192);}
+  x.drawImage(render(off),0,S-96,256,192,0,0,256,192);
+  return c;
+}
+async function exportAnim(){
+  const fmt=$('xfmt').value,bg=$('xbg').value,btn=$('dlanim');
+  const list=cur.entries.filter(e=>!e.end);
+  if(!list.length){xMsg('This animation has no timed frames to export.','err');return;}
+  btn.disabled=true;
+  const written=[];
+  try{
+    const f=await getFF();
+    xMsg('Preparing frames…');
+    const offs=[...new Set(list.map(e=>e.off))];
+    for(const off of offs){
+      const blob=await new Promise(r=>exportCanvas(off,bg).toBlob(r,'image/png'));
+      const name='f_'+off+'.png';
+      await f.writeFile(name,new Uint8Array(await blob.arrayBuffer()));written.push(name);
+    }
+    let txt='';
+    for(const e of list)txt+="file 'f_"+e.off+".png'\nduration "+(Math.max(e.dur,1)/60).toFixed(5)+"\n";
+    txt+="file 'f_"+list[list.length-1].off+".png'\n"; // concat demuxer needs the last file repeated
+    await f.writeFile('list.txt',txt);written.push('list.txt');
+    const out='out.'+(fmt==='apng'?'apng':fmt);
+    const src=['-f','concat','-i','list.txt'];
+    const args={
+      gif:[...src,'-vf','split[a][b];[a]palettegen=reserve_transparent=1[p];[b][p]paletteuse=alpha_threshold=128','-vsync','vfr','-loop','0',out],
+      apng:[...src,'-vsync','vfr','-plays','0','-f','apng',out],
+      webp:[...src,'-vsync','vfr','-c:v','libwebp_anim','-lossless','1','-loop','0',out]
+    }[fmt];
+    xMsg('Encoding…');
+    const code=await f.exec(args);
+    if(code!==0)throw new Error('ffmpeg exited with code '+code);
+    written.push(out);
+    const data=await f.readFile(out);
+    const mime={gif:'image/gif',apng:'image/apng',webp:'image/webp'}[fmt];
+    dl(new Blob([data.buffer],{type:mime}),base(seqName)+'.'+(fmt==='apng'?'png':fmt));
+    xMsg('Exported '+base(seqName)+' as '+fmt.toUpperCase()+' ('+Math.round(data.length/1024)+' KB).','ok');
+  }catch(e){xMsg('Export failed: '+e.message,'err');}
+  finally{
+    if(ff)for(const n of written){try{await ff.deleteFile(n);}catch(_){}}
+    btn.disabled=false;
+  }
+}
+$('dlanim').onclick=exportAnim;
 
 const drop=$('drop'),fin=$('fin');
 drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('dragover');});
