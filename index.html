@@ -397,9 +397,19 @@ function xMsg(t,c){ $('xmsg').innerHTML=t?`<div class="status ${c||''}"><span cl
 function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=()=>rej(new Error('Could not load '+src));document.head.appendChild(s);});}
 async function getFF(){
   if(ff)return ff;
-  if(!window.createFFmpegCore){xMsg('Loading ffmpeg core…');await loadScript(CORE_URL);}
+  let factory=window.createFFmpegCore;
+  if(!factory){
+    xMsg('Loading ffmpeg core…');
+    try{await loadScript(CORE_URL);}catch(_){} // UMD build defines a global
+    factory=window.createFFmpegCore;
+    if(!factory){ // ESM build: default export
+      const m=await import(new URL(CORE_URL,location.href).href);
+      factory=m.default||m.createFFmpegCore;
+    }
+  }
+  if(typeof factory!=='function')throw new Error('ffmpeg-core.js did not provide createFFmpegCore. Use the single-thread @ffmpeg/core 0.12.x file (dist/umd or dist/esm).');
   xMsg('Initialising ffmpeg (~30 MB wasm)…');
-  const core=await createFFmpegCore({
+  const core=await factory({
     mainScriptUrlOrBlob:CORE_URL+'#'+btoa(JSON.stringify({wasmURL:WASM_URL,workerURL:CORE_URL.replace(/\.js$/,'.worker.js')})),
     locateFile:p=>p.endsWith('.wasm')?WASM_URL:p
   });
