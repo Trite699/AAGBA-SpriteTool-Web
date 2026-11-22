@@ -129,7 +129,7 @@ input[type=range]{width:100%;accent-color:var(--accent);}
         <button class="btn btn-primary btn-sm" id="dlanim">Export animation (256×192)</button>
       </div>
       <div id="xmsg"></div>
-      <p class="hint">Frame durations are in 1/60 s ticks. The low byte of the duration field is the time; the high byte holds flags (shown per frame). 254/255 is treated as the end marker (held, or skipped when looping). Animation export uses ffmpeg.wasm, loaded from a CDN on first use (needs an internet connection).</p>
+      <p class="hint">Frame durations are in 1/60 s ticks. The low byte of the duration field is the time; the high byte holds flags (shown per frame). 254/255 is treated as the end marker (held, or skipped when looping). Animation export uses ffmpeg.wasm (ffmpeg-core.js must sit next to this file, the .wasm is fetched from file.garden, and the page must be served over http, not opened as file://).</p>
     </div>
     <div class="card">
       <div class="card-title">All animations <span class="card-title-right">click one to play it</span></div>
@@ -390,28 +390,32 @@ async function loadFiles(files){
 }
 
 // ---------- ffmpeg.wasm export (GIF / APNG / WebP, 256x192) ----------
-const FF_VER='0.12.10',CORE_VER='0.12.6';
-const FF_BASE='https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@'+FF_VER+'/dist/umd/';
-const CORE_BASE='https://cdn.jsdelivr.net/npm/@ffmpeg/core@'+CORE_VER+'/dist/umd/';
+// ffmpeg-core.js sits next to this file; ffmpeg-core.wasm is hosted on file.garden (must allow CORS). Single-thread @ffmpeg/core 0.12.x. Serve over http(s).
+const CORE_URL='./ffmpeg-core.js',WASM_URL='https://file.garden/ZSDZuAh9SRsD-cfP/ffmpeg-core.wasm';
 let ff=null;
 function xMsg(t,c){ $('xmsg').innerHTML=t?`<div class="status ${c||''}"><span class="dot"></span><span>${esc(t)}</span></div>`:''; }
 function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=()=>rej(new Error('Could not load '+src));document.head.appendChild(s);});}
-async function blobURL(url,type){
-  const r=await fetch(url);if(!r.ok)throw new Error('Download failed ('+r.status+'): '+url);
-  return URL.createObjectURL(new Blob([await r.arrayBuffer()],{type}));
-}
 async function getFF(){
   if(ff)return ff;
-  if(!window.FFmpegWASM){xMsg('Loading ffmpeg.wasm…');await loadScript(FF_BASE+'ffmpeg.js');}
-  const f=new FFmpegWASM.FFmpeg();
-  f.on('progress',({progress})=>{if(progress>0&&progress<=1)xMsg('Encoding… '+Math.round(progress*100)+'%');});
-  xMsg('Loading ffmpeg core (~30 MB, first time only)…');
-  await f.load({
-    classWorkerURL:await blobURL(FF_BASE+'814.ffmpeg.js','text/javascript'),
-    coreURL:await blobURL(CORE_BASE+'ffmpeg-core.js','text/javascript'),
-    wasmURL:await blobURL(CORE_BASE+'ffmpeg-core.wasm','application/wasm')
+  if(!window.createFFmpegCore){xMsg('Loading ffmpeg core…');await loadScript(CORE_URL);}
+  xMsg('Initialising ffmpeg (~30 MB wasm)…');
+  const core=await createFFmpegCore({
+    mainScriptUrlOrBlob:CORE_URL+'#'+btoa(JSON.stringify({wasmURL:WASM_URL,workerURL:CORE_URL.replace(/\.js$/,'.worker.js')})),
+    locateFile:p=>p.endsWith('.wasm')?WASM_URL:p
   });
-  return ff=f;
+  core.setLogger(()=>{});
+  core.setProgress(({progress})=>{if(progress>0&&progress<=1)xMsg('Encoding… '+Math.round(progress*100)+'%');});
+  // small shim so the export code can use writeFile / exec / readFile / deleteFile
+  return ff={
+    writeFile:async(n,d)=>core.FS.writeFile(n,d),
+    readFile:async n=>core.FS.readFile(n).slice(),
+    deleteFile:async n=>core.FS.unlink(n),
+    exec:async args=>{
+      await new Promise(r=>setTimeout(r,50)); // let "Encoding…" paint before the main thread blocks
+      core.setTimeout(-1);core.exec(...args);
+      const ret=core.ret;core.reset();return ret;
+    }
+  };
 }
 // 256x192 window centred on the sprite origin (like a DS screen)
 function exportCanvas(off,bg){
